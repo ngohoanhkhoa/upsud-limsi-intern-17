@@ -387,6 +387,13 @@ class EmissionModel:
             
 class BaumWelchModel:
     
+    def add_matrix(self, a, b):
+        # compatible with two matrices different shape
+        c = np.zeros(np.max([np.shape(a), np.shape(b)], axis=0))
+        c[:np.shape(a)[0], :np.shape(a)[1]] += a
+        c[:np.shape(b)[0], :np.shape(b)[1]] += b
+        return c
+    
     def normalize_matrix(self, x, axis=1, whole_matrix=False):
         """Compute softmax values for each sets of scores in x.
             axis=1: row
@@ -634,6 +641,8 @@ class BaumWelchModel:
             # Normalization
             new_transition_matrix = self.normalize_matrix(new_transition_matrix, axis=1)
             transition_list.append(new_transition_matrix)
+        
+        
         
         # 1.2: update
         new_non_negative_set = np.zeros(self.max_distance + self.max_distance + 3)
