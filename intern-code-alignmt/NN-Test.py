@@ -394,6 +394,20 @@ class BaumWelchModel:
         c[:np.shape(b)[0], :np.shape(b)[1]] += b
         return c
     
+    def add_vector(self, a, b):
+        # compatible with two vectors different shape
+        c = np.zeros(np.max([np.shape(a), np.shape(b)], axis=0))
+        c[:len(a)] += a
+        c[:len(b)] += b
+        return c
+    
+    def add_matrix_list(self, a):
+        sum_matrix = [[0]]
+        for aa in a:
+            sum_matrix = self.add_matrix(aa, sum_matrix)
+            
+        return sum_matrix
+    
     def normalize_matrix(self, x, axis=1, whole_matrix=False):
         """Compute softmax values for each sets of scores in x.
             axis=1: row
@@ -542,11 +556,12 @@ class BaumWelchModel:
                     sum_al += alpha[j][t-1] * transition_matrix[j][i]
 
                 alpha[i][t] = emission_matrix[i][t] * sum_al
-
-        return np.log(alpha)
+        
+        norm_alpha = np.sum(alpha, axis=0)
+        return np.divide(alpha, norm_alpha), norm_alpha
     
     
-    def calc_backward_messages(self, transition_matrix, emission_matrix):
+    def calc_backward_messages(self, transition_matrix, emission_matrix, norm_alpha):
         """Calcualte the backward messages ~ beta values.
 
         Return
@@ -556,6 +571,7 @@ class BaumWelchModel:
         # TODO: verify matrix length
         source_len = np.shape(emission_matrix)[1]
         target_len = np.shape(emission_matrix)[0]
+        assert(len(norm_alpha) == source_len) # = t_size
 
         beta = np.zeros(np.shape(emission_matrix))
         beta[:,-1] = [1]*target_len
@@ -564,8 +580,8 @@ class BaumWelchModel:
             for i in range(target_len):
                 for j in range(target_len):
                     beta[i][t] += beta[j][t+1] * transition_matrix[i][j] * emission_matrix[j][t+1]
-
-        return np.log(beta)
+                    
+        return np.divide(beta, norm_alpha)
 
     def calc_posterior_matrix(self, alpha, beta, transition_matrix, emission_matrix):
         """Calcualte the gama and epsilon values in order to reproduce 
@@ -611,9 +627,9 @@ class BaumWelchModel:
         transition_matrix = self.generate_transition_matrix(sentence_length)
 #         emission_matrix = self.normalize_matrix(emission_matrix, axis=0)
         
-        alpha = self.calc_forward_messages(unary_matrix, 
+        alpha, norm_alpha = self.calc_forward_messages(unary_matrix, 
                                            transition_matrix, emission_matrix)
-        beta = self.calc_backward_messages(transition_matrix, emission_matrix)
+        beta = self.calc_backward_messages(transition_matrix, emission_matrix, norm_alpha)
 
         new_unary_matrix, emission_posterior, transition_posterior \
             = self.calc_posterior_matrix(alpha, beta, 
@@ -624,49 +640,36 @@ class BaumWelchModel:
                                            transition_posteriors):
         # 1: update non-negative set: s[-1] = 
         # 1.1: calculate new transition matrix
-        transition_list = []
+        sum_ep = [[0]]
+        sum_gamma = [0]
         for gamma, epsilon in zip(emission_posteriors, transition_posteriors):
-            source_len = np.shape(gamma)[1]
-            target_len = np.shape(gamma)[0]
-            if (source_len <= 1 or target_len <= 1):
-                transition_list.append([0])
+            if (np.shape(gamma)[0] <= 1 or np.shape(gamma)[1] <= 1):
                 continue
-            new_transition_matrix = np.zeros((target_len, target_len))
-            
-            for i in range(target_len):
-                sum_gamma = np.sum(gamma[i, :])
-                for j in range(target_len):
-                    sum_ep = np.sum(epsilon[:, i, j])
-                    new_transition_matrix[i][j] = sum_ep/sum_gamma
-            # Normalization
-            new_transition_matrix = self.normalize_matrix(new_transition_matrix, axis=1)
-            transition_list.append(new_transition_matrix)
-        
-        
+            sum_ep = self.add_matrix(self.add_matrix_list(epsilon), sum_ep)
+            sum_gamma = self.add_vector(np.sum(gamma, axis=1), sum_gamma)
         
         # 1.2: update
         new_non_negative_set = np.zeros(self.max_distance + self.max_distance + 3)
-        n_non_negative_set = np.ones(self.max_distance + self.max_distance + 3)
+        new_non_negative_set_gamma = np.zeros(self.max_distance + self.max_distance + 3)
         
-#        for trans_matrix in transition_list:
-#            for i in range(len(trans_matrix)):
-#                for j in range(len(trans_matrix)):
-#                    if (len(trans_matrix)<=1 or math.isnan(trans_matrix[i][j])):
-#                        continue
-#                    indice = j - i + self.max_distance + 1
-#                    if indice < 0:
-#                        n_non_negative_set[0] += 1
-#                        new_non_negative_set[0] += trans_matrix[i][j]
-#                    elif (indice > 2*self.max_distance + 2):
-#                        n_non_negative_set[-1] += 1
-#                        new_non_negative_set[-1] += trans_matrix[i][j]
-#                    else:
-#                        n_non_negative_set[indice] += 1
-#                        new_non_negative_set[indice] += trans_matrix[i][j]
+        for i in range(len(sum_gamma)):
+            for j in range(len(sum_gamma)):
+                indice = j - i + self.max_distance + 1
+                if indice < 0:
+                    new_non_negative_set[0] += sum_ep[i][j]
+                    new_non_negative_set_gamma[0] += sum_gamma[i]
+                elif (indice > 2*self.max_distance + 2):
+                    new_non_negative_set[-1] += sum_ep[i][j]
+                    new_non_negative_set_gamma[-1] += sum_gamma[i]
+                else:
+                    new_non_negative_set[indice] += sum_ep[i][j]
+                    new_non_negative_set_gamma[indice] += sum_gamma[i]
         
         self.old_non_negative_set = np.copy(self.non_negative_set)
-        self.non_negative_set = np.array(np.divide(new_non_negative_set + self.non_negative_set, n_non_negative_set))
-        
+        self.non_negative_set = np.array(np.divide(new_non_negative_set, new_non_negative_set_gamma))
+        for i, old_n, new_n in zip(range(len(self.non_negative_set)), self.old_non_negative_set, self.non_negative_set):
+            if (np.isnan(new_n)):
+                self.non_negative_set[i] = np.copy(old_n)
 
 # *****************************************************************
 # ************************ Testing Zone ***************************
