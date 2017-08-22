@@ -40,9 +40,11 @@ class EmissionModel:
         print("File Saved !")
         
     def load_obj(self, path):
+        print("Loading file ... " + path)
         f = open(path, 'rb')
         obj = pickle.load(f)
         f.close()
+        print("File loaded !")
         return obj
     
     def save_align(self, alignments, path):
@@ -122,7 +124,7 @@ class EmissionModel:
     #[7,512]
     def __init__(self, vocab_input_size, layer_size, vocab_output_size, baum_welch_model, 
                  epoch=1, batch=1, learning_rate = .01, seed=1412, 
-                 params_path_prefix=None, out_prefix="./", target_AER=None):
+                 params_path_prefix=None, out_prefix=None, target_AER=None):
         
         self.epoch = epoch
         self.batch = batch
@@ -280,7 +282,8 @@ class EmissionModel:
                                   input_indice_shift=input_indice_shift,
                                   align_indice_sift=align_indice_sift)
                 # TODO: calculate AER
-                print("Epoch ", epoch, "Alignment score:", self.calculate_AER_score(result=align, align_indice_sift=align_indice_sift))
+                print("Epoch ", epoch, "Alignment score:", \
+                      self.calculate_AER_score(result=align, align_indice_sift=align_indice_sift))
                 
     def train_model(self, target_inputs, source_inputs, input_indice_shift=0):
         self.emission_posteriors = []
@@ -581,7 +584,8 @@ class BaumWelchModel:
                 for j in range(target_len):
                     beta[i][t] += beta[j][t+1] * transition_matrix[i][j] * emission_matrix[j][t+1]
                     
-        return np.divide(beta, norm_alpha)
+        beta[:,:-1] = np.divide(beta[:,:-1], norm_alpha[1:])
+        return beta
 
     def calc_posterior_matrix(self, alpha, beta, transition_matrix, emission_matrix):
         """Calcualte the gama and epsilon values in order to reproduce 
