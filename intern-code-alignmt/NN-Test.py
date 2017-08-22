@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Wed Aug 16 17:56:16 2017
+Created on Wed Aug 1 17:56:16 2017
 
 @author: vu
 """
@@ -123,8 +123,9 @@ class EmissionModel:
     
     #[7,512]
     def __init__(self, vocab_input_size, layer_size, vocab_output_size, baum_welch_model, 
+                 target_tokenizer, source_tokenizer,
                  epoch=1, batch=1, learning_rate = .01, seed=1412, 
-                 params_path_prefix=None, out_prefix=None, target_AER=None):
+                 params_path_prefix=None, out_prefix=None):
         
         self.epoch = epoch
         self.batch = batch
@@ -133,13 +134,14 @@ class EmissionModel:
         self.emission_posteriors = []
         self.transition_posteriors = []
         self.baum_welch_model = baum_welch_model
+        self.target_tokenizer = target_tokenizer
+        self.source_tokenizer = source_tokenizer
         
         self.vocab_input_size = vocab_input_size
         self.d_embedding_size = layer_size[0]
         
         self.params_path_prefix = params_path_prefix
         self.out_prefix = out_prefix
-        self.target_AER = target_AER
         
         x_training_input = T.matrix().astype(config.floatX)
         
@@ -238,7 +240,8 @@ class EmissionModel:
         
     def train_model_epoch(self, target_inputs, source_inputs, 
                           aer_target_inputs=None, aer_source_inputs=None, 
-                          input_indice_shift=0, align_indice_sift=0):
+                          input_indice_shift=0, align_indice_sift=0,
+                          target_AER=None):
         if (aer_target_inputs==None):
             aer_target_inputs=target_inputs
         if (aer_source_inputs==None):
@@ -250,20 +253,26 @@ class EmissionModel:
             self.transition_posteriors = []
         #         for target_inputs_batch, source_inputs_batch in zip(np.split(target_inputs, self.batch), np.split(source_inputs, self.batch)):
         #             for x_target, x_source in zip(target_inputs_batch, source_inputs_batch):
-            for i, x_target, x_source in zip(range(len(target_inputs)), target_inputs, source_inputs):
-                if (len(x_target) == 1 or len(x_source) == 1):
-                    self.emission_posteriors.append(np.zeros((len(x_target), len(x_source))))
-                    self.transition_posteriors.append(np.zeros((1, len(x_source), len(x_source))))
-                    continue
-                
-                xx_target = [int(x)+input_indice_shift for x in x_target]
-                xx_source = [int(x)+input_indice_shift for x in x_source]
-#                print("\n+++++++++ The sentence ", i)
-#                print("xx_source: ", len(xx_source), " => ", xx_source)
-#                print("xx_target: ", len(xx_target), " => ", xx_target)
-                emis_posterior, trans_posterior = self.train_mini_batch(xx_target, xx_source)
-                self.emission_posteriors.append(emis_posterior)
-                self.transition_posteriors.append(trans_posterior)
+            with open(source_inputs, encoding="utf8") as source_f, open(target_inputs, encoding='utf8') as target_f:
+                i = 0
+                for source_line, target_line in zip(source_f, target_f):
+                    x_source = self.source_tokenizer.texts_to_sequences([source_line.strip()])[0]
+                    x_target = self.target_tokenizer.texts_to_sequences([target_line.strip()])[0]
+                    
+                    if (len(x_target) == 1 or len(x_source) == 1):
+                        self.emission_posteriors.append(np.zeros((len(x_target), len(x_source))))
+                        self.transition_posteriors.append(np.zeros((1, len(x_source), len(x_source))))
+                        continue
+                    
+                    xx_target = [int(x)+input_indice_shift for x in x_target]
+                    xx_source = [int(x)+input_indice_shift for x in x_source]
+    #                print("\n+++++++++ The sentence ", i, " epoch ", epoch)
+    #                print("xx_source: ", len(xx_source), " => ", xx_source)
+    #                print("xx_target: ", len(xx_target), " => ", xx_target)
+                    emis_posterior, trans_posterior = self.train_mini_batch(xx_target, xx_source)
+                    self.emission_posteriors.append(emis_posterior)
+                    self.transition_posteriors.append(trans_posterior)
+                    i += 1
             
             # Update Non-negative set of BW model
             self.baum_welch_model.update_non_negative_transition_set(self.emission_posteriors, self.transition_posteriors)
@@ -272,10 +281,12 @@ class EmissionModel:
             if self.out_prefix != None:
                 align = self.get_alignment(target_inputs=aer_target_inputs, 
                                   source_inputs=aer_source_inputs, 
-                                  input_indice_shift=input_indice_shift)
+                                  input_indice_shift=input_indice_shift,
+                                  align_indice_sift=align_indice_sift)
                 self.save_params(self.out_prefix + "_params_epoch_" + str(epoch))
                 self.save_obj(align, self.out_prefix + "_alignment_epoch_" + str(epoch))
-            if self.target_AER != None:
+                
+            if target_AER == None:
                 if self.out_prefix == None:
                     align = self.get_alignment(target_inputs=aer_target_inputs, 
                                   source_inputs=aer_source_inputs, 
@@ -283,7 +294,7 @@ class EmissionModel:
                                   align_indice_sift=align_indice_sift)
                 # TODO: calculate AER
                 print("Epoch ", epoch, "Alignment score:", \
-                      self.calculate_AER_score(result=align, align_indice_sift=align_indice_sift))
+                      self.calculate_AER_score(result=align, target_AER=target_AER, align_indice_sift=align_indice_sift))
                 
     def train_model(self, target_inputs, source_inputs, input_indice_shift=0):
         self.emission_posteriors = []
@@ -310,59 +321,64 @@ class EmissionModel:
                       input_indice_shift=0, align_indice_sift=0):
         print("Calculating alignments ...")
         alignments = []
-        for i, x_target, x_source in zip(range(len(target_inputs)), target_inputs, source_inputs):
-            align = [0]
-            if (len(x_target) == 1 or len(x_source) == 1):
-                alignments.append(align)
-                continue
-            xx_target = [int(x)+input_indice_shift for x in x_target]
-            xx_source = [int(x)+input_indice_shift for x in x_source]
-#            print("\n+++++++++ The sentence ", i)
-#            print("xx_source: ", len(xx_source), " => ", xx_source)
-#            print("xx_target: ", len(xx_target), " => ", xx_target)
-            emis_matrix = self.test_mini_batch(xx_target, xx_source)
-            trans_matrix = self.baum_welch_model.generate_transition_distant_matrix(len(xx_target))
-            
-            # Calculate aligment [VITERBI]
-            for ind, t in enumerate(range(1, len(x_source))):
-                mul = np.array([emis_matrix[ind], emis_matrix[ind]]).flatten() * trans_matrix[align[-1]]
-#                print("max", np.argmax(mul), ":", mul)
-                align.append(np.argmax(mul))
-            
-            exporting_align = []
-            for ia, a in enumerate(align):
-                if (a < len(xx_target) or a==0 or len(align)==1):
-                    exporting_align.append(str(ia+align_indice_sift) + "-" + str(a+align_indice_sift)) # indice starts from 0
-            
-            assert(align_indice_sift >= 0)
-            
-            if(len(exporting_align) < 1):
-                exporting_align.append(align_indice_sift + "-" + align_indice_sift)
-#            print("Align ", i, " : ", exporting_align, len(exporting_align))
-            alignments.append(exporting_align)
+        with open(source_inputs, encoding="utf8") as source_f, open(target_inputs, encoding='utf8') as target_f:
+                i = 0
+                for source_line, target_line in zip(source_f, target_f):
+                    x_source = self.source_tokenizer.texts_to_sequences([source_line.strip()])[0]
+                    x_target = self.target_tokenizer.texts_to_sequences([target_line.strip()])[0]
+                    
+                    align = [0]
+                    if (len(x_target) == 1 or len(x_source) == 1):
+                        alignments.append(align)
+                        continue
+                    xx_target = [int(x)+input_indice_shift for x in x_target]
+                    xx_source = [int(x)+input_indice_shift for x in x_source]
+        #            print("\n+++++++++ The sentence ", i)
+        #            print("xx_source: ", len(xx_source), " => ", xx_source)
+        #            print("xx_target: ", len(xx_target), " => ", xx_target)
+                    emis_matrix = self.test_mini_batch(xx_target, xx_source)
+                    trans_matrix = self.baum_welch_model.generate_transition_distant_matrix(len(xx_target))
+                    
+                    # Calculate aligment [VITERBI]
+                    for ind, t in enumerate(range(1, len(x_source))):
+                        mul = np.array([emis_matrix[ind], emis_matrix[ind]]).flatten() * trans_matrix[align[-1]]
+        #                print("max", np.argmax(mul), ":", mul)
+                        align.append(np.argmax(mul))
+                    
+                    exporting_align = []
+                    for ia, a in enumerate(align):
+                        if (a < len(xx_target) or a==0 or len(align)==1):
+                            exporting_align.append(str(ia+align_indice_sift) + "-" + str(a+align_indice_sift)) # indice starts from 0
+                    
+                    assert(align_indice_sift >= 0)
+                    
+                    if(len(exporting_align) < 1):
+                        exporting_align.append(align_indice_sift + "-" + align_indice_sift)
+        #            print("Align ", i, " : ", exporting_align, len(exporting_align))
+                    alignments.append(exporting_align)
+                    i += 1
             
         return alignments
     
     def calculate_AER(self, S, P, A):
         S, P, A = np.array(S), np.array(P), np.array(A)
         s_a, p_a, len_s, len_a = 0, 0, 0, 0
-        t = 0.2
         for s, p, a in zip(S, P, A):
             s, p, a = np.array(s), np.array(p), np.array(a)
             s_a += len(list(set(s).intersection(a)))
             p_a += len(list(set(p).intersection(a)))
             len_s += len(s[s != ""])
             len_a += len(a[a != ""])
-        print ("s_a", s_a)
+#        print ("s_a", s_a)
         p_a += s_a
-        print ("p_a", p_a)
+#        print ("p_a", p_a)
         aer = (s_a + p_a) / (len_s + len_a)
-        print ("aer", 1.-aer-t)
+#        print ("aer", 1.-aer)
         
-        return 1. - aer - t
+        return 1. - aer
     
-    def calculate_AER_score(self, result, align_indice_sift=0):
-        target_file = open(self.target_AER) # Index starts from 1
+    def calculate_AER_score(self, result, target_AER, align_indice_sift=0):
+        target_file = open(target_AER) # Index starts from 1
 
         target_lines = target_file.readlines()
         target_lines = [str(line[:-1]) for line in target_lines]
@@ -387,28 +403,39 @@ class EmissionModel:
             P.append(p_.strip().split(" "))
             A.append(a)
         return self.calculate_AER(S, P, A)
+    
             
 class BaumWelchModel:
     
-    def add_matrix(self, a, b):
+    def add_matrix(self, a, b, max_size=None):
         # compatible with two matrices different shape
         c = np.zeros(np.max([np.shape(a), np.shape(b)], axis=0))
         c[:np.shape(a)[0], :np.shape(a)[1]] += a
         c[:np.shape(b)[0], :np.shape(b)[1]] += b
+        if(max_size != None):
+            x , y = np.shape(c)[0], np.shape(c)[1]
+            if(max_size[0] > 0):
+                x = np.min([np.shape(c)[0], max_size[0]])
+            if(max_size[1] > 0):
+                y = np.min([np.shape(c)[0], max_size[0]])
+            return c[:x, :y]
         return c
     
-    def add_vector(self, a, b):
+    def add_vector(self, a, b, max_size=None):
         # compatible with two vectors different shape
         c = np.zeros(np.max([np.shape(a), np.shape(b)], axis=0))
         c[:len(a)] += a
         c[:len(b)] += b
+        if(max_size != None and max_size > 0):
+            s = np.min([np.shape(c), (max_size, 1)], axis=0)
+            print("bum")
+            return c[:s[0]]
         return c
     
     def add_matrix_list(self, a):
         sum_matrix = [[0]]
         for aa in a:
             sum_matrix = self.add_matrix(aa, sum_matrix)
-            
         return sum_matrix
     
     def normalize_matrix(self, x, axis=1, whole_matrix=False):
@@ -462,9 +489,9 @@ class BaumWelchModel:
             for j in range(sentence_length):
                 indice = j - i + self.max_distance + 1
                 if indice < 0:
-                    p_ = self.non_negative_set[0]
+                    p_ = 1e-10#self.non_negative_set[0]
                 elif (indice > 2*self.max_distance + 2):
-                    p_ = self.non_negative_set[-1]
+                    p_ = 1e-10#self.non_negative_set[-1]
                 else:
                     p_ = self.non_negative_set[indice]
                 trans_distant_matrix[i][j] = p_
@@ -507,9 +534,9 @@ class BaumWelchModel:
             for j in range(sentence_length):
                 indice = j - i + self.max_distance + 1
                 if indice < 0:
-                    p_ = self.non_negative_set[0]
-                elif (indice > 2*self.max_distance + 2):
-                    p_ = self.non_negative_set[-1]
+                    p_ = 1e-10#self.non_negative_set[0]
+                elif (indice >= 2*self.max_distance + 2):
+                    p_ = 1e-10#self.non_negative_set[-1]
                 else:
                     p_ = self.non_negative_set[indice]
                 trans_matrix[i][j] = p_
@@ -528,15 +555,12 @@ class BaumWelchModel:
         
     def calc_forward_messages(self, unary_matrix, transition_matrix, emission_matrix):
         """Calcualte the forward messages ~ alpha values.
-        
-        
         Input
         -----
         unary_matrix: emission posteriors - marginal probabilities ~ initial matrix.
                       size ~ [1, target_len]
         transition_matrix: size ~ [target_len, target_len]
         emission_matrix: size ~ [target_len, source_len]
-
         Return
         ------
         alpha
@@ -561,12 +585,11 @@ class BaumWelchModel:
                 alpha[i][t] = emission_matrix[i][t] * sum_al
         
         norm_alpha = np.sum(alpha, axis=0)
+        norm_alpha = np.clip(norm_alpha, a_min=1e-34, a_max=np.max(norm_alpha))
         return np.divide(alpha, norm_alpha), norm_alpha
-    
     
     def calc_backward_messages(self, transition_matrix, emission_matrix, norm_alpha):
         """Calcualte the backward messages ~ beta values.
-
         Return
         ------
         beta
@@ -590,10 +613,8 @@ class BaumWelchModel:
     def calc_posterior_matrix(self, alpha, beta, transition_matrix, emission_matrix):
         """Calcualte the gama and epsilon values in order to reproduce 
         better transition and emission matrix.
-        
         gamma: P(e_aj|f_j)
         epsilon: P(e_aj,e_a(j+1)|f_j)
-
         Return
         ------
         unary_matrix, posterior_gamma, posterior_epsilon
@@ -655,16 +676,20 @@ class BaumWelchModel:
         # 1.2: update
         new_non_negative_set = np.zeros(self.max_distance + self.max_distance + 3)
         new_non_negative_set_gamma = np.zeros(self.max_distance + self.max_distance + 3)
+        new_non_negative_set[0], new_non_negative_set[-1] = 1, 1
+        new_non_negative_set_gamma[0], new_non_negative_set_gamma[-1] = 1, 1
         
-        for i in range(len(sum_gamma)):
-            for j in range(len(sum_gamma)):
+        for i in range(len(sum_ep)):
+            for j in range(len(sum_ep)):
                 indice = j - i + self.max_distance + 1
-                if indice < 0:
-                    new_non_negative_set[0] += sum_ep[i][j]
-                    new_non_negative_set_gamma[0] += sum_gamma[i]
-                elif (indice > 2*self.max_distance + 2):
-                    new_non_negative_set[-1] += sum_ep[i][j]
-                    new_non_negative_set_gamma[-1] += sum_gamma[i]
+                if indice <= 0:
+                    continue
+#                     new_non_negative_set[0] += sum_ep[i][j]
+#                     new_non_negative_set_gamma[0] += sum_gamma[i]
+                elif (indice >= 2*self.max_distance + 2):
+                    continue
+#                     new_non_negative_set[-1] += sum_ep[i][j]
+#                     new_non_negative_set_gamma[-1] += sum_gamma[i]
                 else:
                     new_non_negative_set[indice] += sum_ep[i][j]
                     new_non_negative_set_gamma[indice] += sum_gamma[i]
@@ -679,54 +704,45 @@ class BaumWelchModel:
 # ************************ Testing Zone ***************************
 # *****************************************************************
 
-def read_test_files(source_file, target_file, aer=0):
-    
+def get_tokenizer(source_file, target_file):
     # Read training file
     # Read vocab en - source
     #"/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/testing.en-cz.en"
     #"E:/Working/Intership2017/data/en-cz/formatted/testing/testing.en-cz.en"
-    en = []
-    with open(source_file, encoding="utf8") as en_file:
-        for line in en_file:
-            en.append(line.strip())
-    en_tokenizer = Tokenizer(lower=False, filters='\t\n')
-    en_tokenizer.fit_on_texts(en)
-    en_sequences = en_tokenizer.texts_to_sequences(en)
-    en_source_indices = en_tokenizer.word_index
-    
     # Read vocab cz - target
     #"/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/testing.en-cz.cz"
     #"E:/Working/Intership2017/data/en-cz/formatted/testing/testing.en-cz.cz"
-    cz = []
-    with open(target_file, encoding='utf8') as cz_file:
-        for line in cz_file:
-            cz.append(line.strip())
-    cz_tokenizer = Tokenizer(lower=False, filters='\t\n')
-    cz_tokenizer.fit_on_texts(cz)
-    cz_sequences = cz_tokenizer.texts_to_sequences(cz)
-    cz_target_indices = cz_tokenizer.word_index
-
-    # subcorpus
-    #en_sequences = en_sequences[:10]
-    #cz_sequences = cz_sequences[:10]
+    source_tokenizer = Tokenizer(lower=False, filters='\t\n')
+    target_tokenizer = Tokenizer(lower=False, filters='\t\n')
+    with open(source_file, encoding="utf8") as source_f, open(target_file, encoding='utf8') as target_f:
+        source = []
+        target = []
+        for source_line, target_line in zip(source_f, target_f):
+            source.append(source_line.strip())
+            target.append(target_line.strip())
+            if (len(target) >= 2000):
+                source_tokenizer.fit_on_texts(source)
+                target_tokenizer.fit_on_texts(target)
+                source, target = [], []
+        if (len(target) > 0):
+            source_tokenizer.fit_on_texts(source)
+            target_tokenizer.fit_on_texts(target)
+            source, target = [], []
+    source_indices = source_tokenizer.word_index
+    target_indices = target_tokenizer.word_index
     
-    if (aer > 0):
-        aer_target_inputs = cz_sequences[-aer:]
-        aer_source_inputs = en_sequences[-aer:]
-        return en_sequences, len(en_source_indices), cz_sequences, len(cz_target_indices), aer_target_inputs, aer_source_inputs
-    
-    return en_sequences, len(en_source_indices), cz_sequences, len(cz_target_indices)
+    return source_tokenizer, len(source_indices), target_tokenizer, len(target_indices)
 
-source_sequences, n_source_indices, target_sequences, n_target_indices, aer_target_inputs, aer_source_inputs = read_test_files(
+source_tokenizer, n_source_indices, target_tokenizer, n_target_indices = get_tokenizer(
         "/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/GIZA++2/corp.merg.en-cz.cln.en",
-        "/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/GIZA++2/corp.merg.en-cz.cln.cz",
-        2489
+        "/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/GIZA++2/corp.merg.en-cz.cln.cz"
         )
+
 print(n_source_indices)
 print(n_target_indices)
 
 # BW model variables
-max_distance = 50
+max_distance = 10
 baum_welch_model = BaumWelchModel(max_distance, seed=1111)
 print("non_negative_set", baum_welch_model.non_negative_set)
 
@@ -737,13 +753,14 @@ layer_size = [d_embedding, 512]
 vocab_output_size = n_source_indices
 emission_model = EmissionModel(vocab_input_size=vocab_input_size, layer_size=layer_size, 
                                vocab_output_size=vocab_output_size, baum_welch_model=baum_welch_model,
-                               out_prefix="/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/HMM/test/epoch100-alltestset-2/1708_")
+                               target_tokenizer=target_tokenizer, source_tokenizer=source_tokenizer,
+                               out_prefix="/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/HMM/test/epoch100-alltestset-2/2208_")
 emission_model.epoch = 100
-
-trans_posteriors = emission_model.train_model_epoch(target_inputs=np.array(target_sequences), 
-                                                    source_inputs=np.array(source_sequences), 
-                                                    aer_target_inputs=aer_target_inputs, 
-                                                    aer_source_inputs=aer_source_inputs,
+trans_posteriors = emission_model.train_model_epoch(target_inputs="/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/GIZA++2/corp.merg.en-cz.cln.cz", 
+                                                    source_inputs="/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/GIZA++2/corp.merg.en-cz.cln.en", 
+                                                    aer_target_inputs="/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/testing.en-cz.cz", 
+                                                    aer_source_inputs="/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/testing.en-cz.en",
                                                     input_indice_shift=-1,
-                                                    align_indice_sift=1)
+                                                    align_indice_sift=1,
+                                                    target_AER="/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/testing.en-cz.aligment")
 # print("trans_posteriors", np.shape(trans_posteriors), trans_posteriors)
