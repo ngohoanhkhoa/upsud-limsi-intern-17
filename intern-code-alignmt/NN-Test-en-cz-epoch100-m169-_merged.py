@@ -212,7 +212,7 @@ class EmissionModel:
         emission_matrix = [] # [f_size, e_size]
         for indice in testing_source:
             emission_matrix.append(softmax_matrix[indice])
-#        print("emission_matrix", np.array(emission_matrix), np.shape(emission_matrix))
+#        print("emission_matrix", emission_matrix, np.shape(emission_matrix))
         # Normalize emission_matrix
 #         emission_matrix = self.baum_welch_model.normalize_matrix(emission_matrix, axis=0)
 #        print("emission_matrix nomalized", emission_matrix, np.shape(emission_matrix))
@@ -268,7 +268,7 @@ class EmissionModel:
                     
                     xx_target = [int(x)+input_indice_shift for x in x_target]
                     xx_source = [int(x)+input_indice_shift for x in x_source]
-    #                print("\n+++++++++ The sentence ", i, " epoch ", epoch)
+                    print("\n+++++++++ The sentence ", i, " epoch ", epoch)
     #                print("xx_source: ", len(xx_source), " => ", xx_source)
     #                print("xx_target: ", len(xx_target), " => ", xx_target)
                     emis_posterior, trans_posterior = self.train_mini_batch(xx_target, xx_source)
@@ -298,27 +298,6 @@ class EmissionModel:
                 print("Epoch ", epoch, "Alignment score:", \
                       self.calculate_AER_score(result=align, target_AER=target_AER, align_indice_sift=align_indice_sift))
                 
-    def train_model(self, target_inputs, source_inputs, input_indice_shift=0):
-        self.emission_posteriors = []
-        self.transition_posteriors = []
-#         for target_inputs_batch, source_inputs_batch in zip(np.split(target_inputs, self.batch), np.split(source_inputs, self.batch)):
-#             for x_target, x_source in zip(target_inputs_batch, source_inputs_batch):
-        for i, x_target, x_source in zip(range(len(target_inputs)), target_inputs, source_inputs):
-            if (len(x_target) == 1 or len(x_source) == 1):
-                self.emission_posteriors.append(np.zeros((len(x_target), len(x_source))))
-                self.transition_posteriors.append(np.zeros((len(1), len(x_source), len(x_source))))
-                continue
-            xx_target = [int(x)+input_indice_shift for x in x_target]
-            xx_source = [int(x)+input_indice_shift for x in x_source]
-            print("\n+++++++++ The sentence ", i)
-            print("xx_source: ", len(xx_source), " => ", xx_source)
-            print("xx_target: ", len(xx_target), " => ", xx_target)
-            emis_posterior, trans_posterior = self.train_mini_batch(xx_target, xx_source)
-            self.emission_posteriors.append(emis_posterior)
-            self.transition_posteriors.append(trans_posterior)
-            
-        return self.transition_posteriors
-    
     def get_alignment(self, target_inputs, source_inputs, 
                       input_indice_shift=0, align_indice_sift=0):
         print("Calculating alignments ...")
@@ -384,7 +363,7 @@ class EmissionModel:
 
         target_lines = target_file.readlines()
         target_lines = [str(line[:-1]) for line in target_lines]
-        target_lines = np.reshape(target_lines, (len(target_lines)/2, 2))
+        target_lines = np.reshape(target_lines, (2501, 2))
         
         sure = target_lines[:,0]
         possible = target_lines[:,1]
@@ -450,18 +429,17 @@ class BaumWelchModel:
         Output
         ------
         """
-        x = np.log(x)
         if len(np.shape(x)) == 1 or whole_matrix:
             e_x = np.exp(x - np.max(x))
-#            e_x = x
+            e_x = x
             return e_x / np.sum(e_x)
         if axis == 0:
             e_x = np.exp( np.subtract(x, np.max(x, axis=axis)[None, :]) )
-#            e_x = x
+            e_x = x
             return e_x / np.sum(e_x, axis=axis)[None, :]
         else: 
             e_x = np.exp( np.subtract(x, np.max(x, axis=axis)[:, None]) )
-#            e_x = x
+            e_x = x
             return e_x / np.sum(e_x, axis=axis)[:, None]
         
     def generate_transition_distant_matrix(self, sentence_length, 
@@ -587,14 +565,9 @@ class BaumWelchModel:
 
                 alpha[i][t] = emission_matrix[i][t] * sum_al
         
-#        norm_alpha = np.sum(alpha, axis=0)
-#        norm_alpha = np.clip(norm_alpha, a_min=1e-34, a_max=np.max(norm_alpha))
-        
-        alpha = np.log(alpha)
-        e_x = np.exp(alpha - np.max(alpha))
-        norm_alpha = np.sum(e_x, axis=0)
-        norm_alpha = np.clip(norm_alpha, 1e-50, np.max(norm_alpha))
-        return np.divide(e_x, norm_alpha), norm_alpha
+        norm_alpha = np.sum(alpha, axis=0)
+        norm_alpha = np.clip(norm_alpha, a_min=1e-34, a_max=np.max(norm_alpha))
+        return np.divide(alpha, norm_alpha), norm_alpha
     
     def calc_backward_messages(self, transition_matrix, emission_matrix, norm_alpha):
         """Calcualte the backward messages ~ beta values.
@@ -614,13 +587,9 @@ class BaumWelchModel:
             for i in range(target_len):
                 for j in range(target_len):
                     beta[i][t] += beta[j][t+1] * transition_matrix[i][j] * emission_matrix[j][t+1]
-        
-        e_x = np.copy(beta)
-        e_x = np.log(e_x)
-        e_x = np.exp(e_x - np.max(e_x))
-        e_x[:,:-1] = np.divide(e_x[:,:-1], norm_alpha[1:])
-        e_x[:,-1] = beta[:,-1]
-        return e_x
+                    
+        beta[:,:-1] = np.divide(beta[:,:-1], norm_alpha[1:])
+        return beta
 
     def calc_posterior_matrix(self, alpha, beta, transition_matrix, emission_matrix):
         """Calcualte the gama and epsilon values in order to reproduce 
@@ -659,8 +628,8 @@ class BaumWelchModel:
 
     def calculate_baum_welch_posteriors(self, sentence_length, emission_matrix, unary_matrix=None):
         if unary_matrix == None:
-            unary_matrix = [0.01]*sentence_length
-            unary_matrix[0] = 1 - np.sum(unary_matrix) + 0.01
+            unary_matrix = [0.02]*sentence_length
+            unary_matrix[0] = 1 - np.sum(unary_matrix) + 0.02
         transition_matrix = self.generate_transition_matrix(sentence_length)
 #         emission_matrix = self.normalize_matrix(emission_matrix, axis=0)
         
@@ -688,20 +657,20 @@ class BaumWelchModel:
         # 1.2: update
         new_non_negative_set = np.zeros(self.max_distance + self.max_distance + 3)
         new_non_negative_set_gamma = np.zeros(self.max_distance + self.max_distance + 3)
-#        new_non_negative_set[0], new_non_negative_set[-1] = 1, 1
-#        new_non_negative_set_gamma[0], new_non_negative_set_gamma[-1] = 1, 1
+        new_non_negative_set[0], new_non_negative_set[-1] = 1, 1
+        new_non_negative_set_gamma[0], new_non_negative_set_gamma[-1] = 1, 1
         
         for i in range(len(sum_ep)):
             for j in range(len(sum_ep)):
                 indice = j - i + self.max_distance + 1
                 if indice < 0:
 #                    continue
-                    new_non_negative_set[0] += sum_ep[i][j]
-                    new_non_negative_set_gamma[0] += sum_gamma[i]
+                     new_non_negative_set[0] += sum_ep[i][j]
+                     new_non_negative_set_gamma[0] += sum_gamma[i]
                 elif (indice > 2*self.max_distance + 2):
 #                    continue
-                    new_non_negative_set[-1] += sum_ep[i][j]
-                    new_non_negative_set_gamma[-1] += sum_gamma[i]
+                     new_non_negative_set[-1] += sum_ep[i][j]
+                     new_non_negative_set_gamma[-1] += sum_gamma[i]
                 else:
                     new_non_negative_set[indice] += sum_ep[i][j]
                     new_non_negative_set_gamma[indice] += sum_gamma[i]
@@ -715,21 +684,7 @@ class BaumWelchModel:
 # *****************************************************************
 # ************************ Testing Zone ***************************
 # *****************************************************************
-def load_obj(path):
-    print("Loading file ... " + path)
-    f = open(path, 'rb')
-    obj = pickle.load(f)
-    f.close()
-    print("File loaded !")
-    return obj
 
-def save_obj(obj, path):
-    print("Saving file ... " + path)
-    f = open(path, 'wb')
-    pickle.dump(obj, f, protocol=pickle.HIGHEST_PROTOCOL)
-    f.close()
-    print("File Saved !")
-    
 def get_tokenizer(source_file, target_file):
     # Read training file
     # Read vocab en - source
@@ -759,17 +714,10 @@ def get_tokenizer(source_file, target_file):
     
     return source_tokenizer, len(source_indices), target_tokenizer, len(target_indices)
 
-#source_tokenizer, n_source_indices, target_tokenizer, n_target_indices = get_tokenizer(
-#        "/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/GIZA++2/corp.merg.en-cz.cln.en",
-#        "/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/GIZA++2/corp.merg.en-cz.cln.cz"
-#        )
-
-source_tokenizer = load_obj("/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/HMM/tokenizers/cz-en/onlytesting.source.en-cz.en.tokenizer")
-n_source_indices = len(source_tokenizer.word_index)
-target_tokenizer = load_obj("/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/HMM/tokenizers/cz-en/onlytesting.source.en-cz.cz.tokenizer")
-n_target_indices = len(target_tokenizer.word_index)
-
-# ************************* Starting test ***********************************
+source_tokenizer, n_source_indices, target_tokenizer, n_target_indices = get_tokenizer(
+        "/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/testing.en-cz.en",
+        "/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/testing.en-cz.cz"
+        )
 
 print(n_source_indices)
 print(n_target_indices)
@@ -787,7 +735,7 @@ vocab_output_size = n_source_indices
 emission_model = EmissionModel(vocab_input_size=vocab_input_size, layer_size=layer_size, 
                                vocab_output_size=vocab_output_size, baum_welch_model=baum_welch_model,
                                target_tokenizer=target_tokenizer, source_tokenizer=source_tokenizer,
-                               out_prefix="/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/HMM/test/epoch100-alltestset-2/2208_")
+                               out_prefix="/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/HMM/test/epoch100-alltestset-update-Every-3/2308_")
 emission_model.epoch = 100
 trans_posteriors = emission_model.train_model_epoch(target_inputs="/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/GIZA++2/corp.merg.en-cz.cln.cz", 
                                                     source_inputs="/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/GIZA++2/corp.merg.en-cz.cln.en", 

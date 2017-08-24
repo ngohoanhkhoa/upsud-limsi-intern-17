@@ -259,6 +259,9 @@ class EmissionModel:
                     x_source = self.source_tokenizer.texts_to_sequences([source_line.strip()])[0]
                     x_target = self.target_tokenizer.texts_to_sequences([target_line.strip()])[0]
                     
+                    if (len(x_target) < 1 or len(x_source) < 1):
+                        continue
+                    
                     if (len(x_target) == 1 or len(x_source) == 1):
                         self.emission_posteriors.append(np.zeros((len(x_target), len(x_source))))
                         self.transition_posteriors.append(np.zeros((1, len(x_source), len(x_source))))
@@ -266,10 +269,10 @@ class EmissionModel:
                     
                     xx_target = [int(x)+input_indice_shift for x in x_target]
                     xx_source = [int(x)+input_indice_shift for x in x_source]
-                    if (i%1000==0):
-                        print("\n+++++++++ The sentence ", i, " epoch ", epoch)
-#                        print("xx_source: ", len(xx_source), " => ", xx_source)
-#                        print("xx_target: ", len(xx_target), " => ", xx_target)
+#                    if (i%1000==0):
+                    print("\n+++++++++ The sentence ", i, " epoch ", epoch)
+                    print("xx_source: ", len(xx_source), " => ", xx_source)
+                    print("xx_target: ", len(xx_target), " => ", xx_target)
                     emis_posterior, trans_posterior = self.train_mini_batch(xx_target, xx_source)
                     self.emission_posteriors.append(emis_posterior)
                     self.transition_posteriors.append(trans_posterior)
@@ -287,7 +290,7 @@ class EmissionModel:
                 self.save_params(self.out_prefix + "_params_epoch_" + str(epoch))
                 self.save_obj(align, self.out_prefix + "_alignment_epoch_" + str(epoch))
                 
-            if target_AER == None:
+            if target_AER != None:
                 if self.out_prefix == None:
                     align = self.get_alignment(target_inputs=aer_target_inputs, 
                                   source_inputs=aer_source_inputs, 
@@ -514,9 +517,9 @@ class BaumWelchModel:
             for j in range(sentence_length):
                 indice = j - i + self.max_distance + 1
                 if indice < 0:
-                    p_ = 1e-10#self.non_negative_set[0]
+                    p_ = self.non_negative_set[0]
                 elif (indice >= 2*self.max_distance + 2):
-                    p_ = 1e-10#self.non_negative_set[-1]
+                    p_ = self.non_negative_set[-1]
                 else:
                     p_ = self.non_negative_set[indice]
                 trans_matrix[i][j] = p_
@@ -662,11 +665,11 @@ class BaumWelchModel:
         for i in range(len(sum_ep)):
             for j in range(len(sum_ep)):
                 indice = j - i + self.max_distance + 1
-                if indice <= 0:
+                if indice < 0:
                     continue
 #                     new_non_negative_set[0] += sum_ep[i][j]
 #                     new_non_negative_set_gamma[0] += sum_gamma[i]
-                elif (indice >= 2*self.max_distance + 2):
+                elif (indice > 2*self.max_distance + 2):
                     continue
 #                     new_non_negative_set[-1] += sum_ep[i][j]
 #                     new_non_negative_set_gamma[-1] += sum_gamma[i]
@@ -734,7 +737,7 @@ vocab_output_size = n_source_indices
 emission_model = EmissionModel(vocab_input_size=vocab_input_size, layer_size=layer_size, 
                                vocab_output_size=vocab_output_size, baum_welch_model=baum_welch_model,
                                target_tokenizer=target_tokenizer, source_tokenizer=source_tokenizer,
-                               out_prefix="/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/HMM/test/epoch100-alltestset-3/2208_")
+                               out_prefix="/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/HMM/test/epoch100-alltestset-3/2308_")
 emission_model.epoch = 100
 trans_posteriors = emission_model.train_model_epoch(target_inputs="/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/GIZA++2/corp.merg.en-cz.cln.cz", 
                                                     source_inputs="/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/GIZA++2/corp.merg.en-cz.cln.en", 
