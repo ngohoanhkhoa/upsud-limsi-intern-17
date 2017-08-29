@@ -15,23 +15,26 @@ import theano.tensor as T
 from theano import function, printing
 import theano
 
-from theano import config
+#theano.config.floatX = "float64"
+
+#from theano import config
 # config.device = 'cpu'
 # config.gcc.cxxflags = "-D_hypot=hypot"
-config.compute_test_value = 'off'
+#config.compute_test_value = 'off'
 #import os
-#os.environ["THEANO_FLAGS"] = "exception_verbosity=high,on_opt_error=optimizer_excluding=ShapeOpt:local_lift_transpose_through_dot:scan_opt"
+#os.environ["THEANO_FLAGS"] = "floatX=float64,device=cpu,mode=FAST_RUN,cxx=/usr/bin/g++-4.8"
 from theano.compile.nanguardmode import NanGuardMode
 # config.NanGuardMode.action == 'pdb'
 
 from keras.preprocessing.text import Tokenizer
 from keras.preprocessing.sequence import pad_sequences
 
+theano.config.floatX = "float64"
+
 class EmissionModel:
     """ Simple emission model without CNN
     word embedding layer -> ReLU layer -> softmax layer
     """
-    
     def save_obj(self, obj, path):
         print("Saving file ... " + path)
         f = open(path, 'wb')
@@ -124,7 +127,7 @@ class EmissionModel:
     #[7,512]
     def __init__(self, vocab_input_size, layer_size, vocab_output_size, baum_welch_model, 
                  target_tokenizer, source_tokenizer,
-                 epoch=1, batch=1, learning_rate = .01, seed=1412, 
+                 epoch=1, batch=1, learning_rate = .001, seed=1412, 
                  params_path_prefix=None, out_prefix=None):
         
         self.epoch = epoch
@@ -138,12 +141,13 @@ class EmissionModel:
         self.source_tokenizer = source_tokenizer
         
         self.vocab_input_size = vocab_input_size
+        self.vocab_output_size = vocab_output_size
         self.d_embedding_size = layer_size[0]
         
         self.params_path_prefix = params_path_prefix
         self.out_prefix = out_prefix
         
-        x_training_input = T.matrix().astype(config.floatX)
+        x_training_input = T.matrix().astype(theano.config.floatX)
         
         if (self.params_path_prefix == None):
             self.w, self.b = self.init_weights_bias(vocab_input_size, layer_size, vocab_output_size, seed)
@@ -160,13 +164,14 @@ class EmissionModel:
         relu_layer_reshaped = T.reshape(relu_layer, z_relu_layer_shape) # [512, 5]
         
         # Softmax layer
+#        z_softmax_layer = T.tanh(T.dot(self.w[2], relu_layer_reshaped) + self.b[2]) # [12, 512] * [512, 5] = [12, 5]
         z_softmax_layer = T.dot(self.w[2], relu_layer_reshaped) + self.b[2] # [12, 512] * [512, 5] = [12, 5]
-#        softmax_layer = T.transpose(T.nnet.logsoftmax(T.transpose(z_softmax_layer))) # Output: [12, 5]
-        softmax_layer = T.nnet.softmax(z_softmax_layer) # Output: [12, 5]
-        softmax_layer_clipped = T.clip(softmax_layer, 1e-35, 1.0 - 1e-35)
+        softmax_layer = T.transpose(T.nnet.softmax(T.transpose(z_softmax_layer))) # Output: [12, 5]
+#        softmax_layer = T.nnet.softmax(z_softmax_layer) # Output: [12, 5]
+        softmax_layer_clipped = T.clip(softmax_layer, 1e-30, 1.0 - 1e-30)
         
         # Calculate new gradient
-        posteriors = T.matrix().astype(config.floatX)
+        posteriors = T.matrix().astype(theano.config.floatX)
         
         cost = T.sum(T.transpose(posteriors) * T.log(softmax_layer_clipped))
 #        cost = T.sum(T.transpose(posteriors) * softmax_layer)
@@ -203,36 +208,37 @@ class EmissionModel:
         
     def train_mini_batch(self, testing_target, testing_source):
         one_hot_input = np.eye(self.vocab_input_size)[testing_target].T
-        one_hot_input = np.asarray(one_hot_input).astype(config.floatX)
+        one_hot_input = np.asarray(one_hot_input).astype(theano.config.floatX)
 #        print("one_hot_input", one_hot_input, np.shape(one_hot_input))
         softmax_matrix = self.test_values(one_hot_input)
         print("softmax_matrix", softmax_matrix, np.shape(softmax_matrix))
-#        softmax_matrix = self.baum_welch_model.normalize_matrix(np.exp(softmax_matrix), axis=0)
-#        print("softmax_matrix nomalized", softmax_matrix, np.shape(softmax_matrix))
+        softmax_matrix = np.clip(softmax_matrix, 1e-30, np.max(softmax_matrix))
+        softmax_matrix = self.baum_welch_model.normalize_matrix(np.exp(softmax_matrix), axis=0)
+        print("softmax_matrix nomalized", softmax_matrix, np.shape(softmax_matrix))
         
         emission_posterior_vout = np.zeros_like(softmax_matrix.T) # [V_f_size, e_size]
         emission_matrix = [] # [f_size, e_size]
         for indice in testing_source:
             emission_matrix.append(softmax_matrix[indice])
-        print("emission_matrix", np.array(emission_matrix), np.shape(emission_matrix))
+        print("emission_matrix", emission_matrix, np.shape(emission_matrix))
         # Normalize emission_matrix
 #         emission_matrix = self.baum_welch_model.normalize_matrix(emission_matrix, axis=0)
 #        print("emission_matrix nomalized", emission_matrix, np.shape(emission_matrix))
         emission_posterior, transition_posterior = \
             self.baum_welch_model.calculate_baum_welch_posteriors(len(testing_target), np.transpose(emission_matrix))
-        print("emission_posterior", emission_posterior, np.shape(emission_posterior))
+        print("emission_posterior", np.array(emission_posterior), np.shape(emission_posterior))
         
         # transform emission size to [target_size, v_out]
         for i, indice in enumerate(testing_source):
             emission_posterior_vout[:, indice] = np.maximum(emission_posterior_vout[:, indice], emission_posterior[:, i])
 #         print("emission_posterior_vout", emission_posterior_vout, np.shape(emission_posterior_vout))
-        self.train_mini_batch_function(one_hot_input, np.asarray(emission_posterior_vout).astype(config.floatX))
+        self.train_mini_batch_function(one_hot_input, np.asarray(emission_posterior_vout).astype(theano.config.floatX))
         
-        return emission_posterior, transition_posterior
+        return np.array(emission_posterior), transition_posterior
     
     def test_mini_batch(self, testing_target, testing_source):
         one_hot_input = np.eye(self.vocab_input_size)[testing_target].T
-        one_hot_input = np.asarray(one_hot_input).astype(config.floatX)
+        one_hot_input = np.asarray(one_hot_input).astype(theano.config.floatX)
         softmax_matrix = self.test_values(one_hot_input)
         
         emission_matrix = [] # [f_size, e_size]
@@ -248,6 +254,11 @@ class EmissionModel:
             aer_target_inputs=target_inputs
         if (aer_source_inputs==None):
             aer_source_inputs=source_inputs
+            
+        print("target_inputs", target_inputs)
+        print("source_inputs", source_inputs)
+        print("aer_target_inputs", aer_target_inputs)
+        print("aer_source_inputs", aer_source_inputs)
         # TODO: add epoch functionality
         for epoch in range(self.epoch):
             print("******** Epoch ", epoch, " ***********")
@@ -256,6 +267,7 @@ class EmissionModel:
         #         for target_inputs_batch, source_inputs_batch in zip(np.split(target_inputs, self.batch), np.split(source_inputs, self.batch)):
         #             for x_target, x_source in zip(target_inputs_batch, source_inputs_batch):
             with open(source_inputs, encoding="utf8") as source_f, open(target_inputs, encoding='utf8') as target_f:
+                print("running ...")
                 i = 0
                 for source_line, target_line in zip(source_f, target_f):
                     x_source = self.source_tokenizer.texts_to_sequences([source_line.strip()])[0]
@@ -456,16 +468,30 @@ class BaumWelchModel:
         x = np.log(x)
         if len(np.shape(x)) == 1 or whole_matrix:
             e_x = np.exp(x - np.max(x))
-#            e_x = x
-            return e_x / np.sum(e_x)
+            e_x = np.nan_to_num(e_x)
+            return np.nan_to_num(e_x / np.sum(e_x))
         if axis == 0:
             e_x = np.exp( np.subtract(x, np.max(x, axis=axis)[None, :]) )
-#            e_x = x
-            return e_x / np.sum(e_x, axis=axis)[None, :]
+            e_x = np.nan_to_num(e_x)
+            return np.nan_to_num(e_x / np.sum(e_x, axis=axis)[None, :])
         else: 
             e_x = np.exp( np.subtract(x, np.max(x, axis=axis)[:, None]) )
-#            e_x = x
-            return e_x / np.sum(e_x, axis=axis)[:, None]
+            e_x = np.nan_to_num(e_x)
+            return np.nan_to_num(e_x / np.sum(e_x, axis=axis)[:, None])
+        # for testing
+#        x = np.log(x)
+#        if len(np.shape(x)) == 1 or whole_matrix:
+#            e_x = np.exp(x - np.max(x))
+##            e_x = np.nan_to_num(e_x)
+#            return e_x / np.sum(e_x)
+#        if axis == 0:
+#            e_x = np.exp( np.subtract(x, np.max(x, axis=axis)[None, :]) )
+##            e_x = np.nan_to_num(e_x)
+#            return e_x / np.sum(e_x, axis=axis)[None, :]
+#        else: 
+#            e_x = np.exp( np.subtract(x, np.max(x, axis=axis)[:, None]) )
+##            e_x = np.nan_to_num(e_x)
+#            return e_x / np.sum(e_x, axis=axis)[:, None]
         
     def generate_transition_distant_matrix(self, sentence_length, 
                                            po=0., nomalized=True):
@@ -593,13 +619,15 @@ class BaumWelchModel:
 #        norm_alpha = np.sum(alpha, axis=0)
 #        norm_alpha = np.clip(norm_alpha, a_min=1e-34, a_max=np.max(norm_alpha))
         
+#        return alpha, 0
 #        print("alpha before", alpha)
         alpha = np.log(alpha)
-#        print("alpha e_x log", alpha)
         e_x = np.exp(alpha - np.max(alpha))
+        e_x = np.nan_to_num(e_x)
         norm_alpha = np.sum(e_x, axis=0)
-        norm_alpha = np.clip(norm_alpha, 1e-34, np.max(norm_alpha))
-        return np.divide(e_x, norm_alpha), norm_alpha
+        norm_alpha = np.nan_to_num(norm_alpha)
+        return np.nan_to_num(np.divide(e_x, norm_alpha)), norm_alpha
+#        return np.divide(e_x, norm_alpha), norm_alpha
     
     def calc_backward_messages(self, transition_matrix, emission_matrix, norm_alpha):
         """Calcualte the backward messages ~ beta values.
@@ -610,7 +638,7 @@ class BaumWelchModel:
         # TODO: verify matrix length
         source_len = np.shape(emission_matrix)[1]
         target_len = np.shape(emission_matrix)[0]
-        assert(len(norm_alpha) == source_len) # = t_size
+
 
         beta = np.zeros(np.shape(emission_matrix))
         beta[:,-1] = [1]*target_len
@@ -620,6 +648,8 @@ class BaumWelchModel:
                 for j in range(target_len):
                     beta[i][t] += beta[j][t+1] * transition_matrix[i][j] * emission_matrix[j][t+1]
         
+#        return beta
+        assert(len(norm_alpha) == source_len) # = t_size
 #        print("beta before", beta)
         e_x = np.copy(beta)
         e_x = np.log(e_x)
@@ -627,7 +657,8 @@ class BaumWelchModel:
         e_x = np.exp(e_x - np.max(e_x))
         e_x[:,:-1] = np.divide(e_x[:,:-1], norm_alpha[1:])
         e_x[:,-1] = beta[:,-1]
-        return e_x
+        return np.nan_to_num(e_x)
+#        return e_x
 
     def calc_posterior_matrix(self, alpha, beta, transition_matrix, emission_matrix):
         """Calcualte the gama and epsilon values in order to reproduce 
@@ -669,14 +700,18 @@ class BaumWelchModel:
             unary_matrix = [0.01]*sentence_length
             unary_matrix[0] = 1 - np.sum(unary_matrix) + 0.01
         transition_matrix = self.generate_transition_matrix(sentence_length)
-#         emission_matrix = self.normalize_matrix(emission_matrix, axis=0)
+#        emission_matrix = self.normalize_matrix(emission_matrix, axis=0)
+#        emission_matrix = np.clip(emission_matrix, 1e-35, np.max(emission_matrix))
+#        emission_matrix = self.normalize_matrix(emission_matrix, axis=0)
+#        print("emission_matrix nomalized", emission_matrix)
+#        emission_matrix = np.clip(emission_matrix, 1e-35, np.max(emission_matrix))
 #        print("transition_matrix", transition_matrix)
         
         alpha, norm_alpha = self.calc_forward_messages(unary_matrix, 
                                            transition_matrix, emission_matrix)
         
         print("alpha", alpha)
-        print("norm_alpha", norm_alpha)
+#        print("norm_alpha", norm_alpha)
         beta = self.calc_backward_messages(transition_matrix, emission_matrix, norm_alpha)
         print("beta", beta)
         
@@ -776,7 +811,6 @@ def get_tokenizer(source_file, target_file):
 #        "/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/GIZA++2/corp.merg.en-cz.cln.cz"
 #        )
 
-
 source_tokenizer = load_obj("/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/HMM/tokenizers/en-cz/onlytesting.source.en-cz.en.tokenizer")
 n_source_indices = len(source_tokenizer.word_index)
 target_tokenizer = load_obj("/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/HMM/tokenizers/en-cz/onlytesting.target.en-cz.cz.tokenizer")
@@ -794,19 +828,25 @@ print("non_negative_set", baum_welch_model.non_negative_set)
 
 # Emission model variables
 vocab_input_size = n_target_indices
-d_embedding = 128
+d_embedding = 512
 layer_size = [d_embedding, 512]
 vocab_output_size = n_source_indices
 emission_model = EmissionModel(vocab_input_size=vocab_input_size, layer_size=layer_size, 
                                vocab_output_size=vocab_output_size, baum_welch_model=baum_welch_model,
                                target_tokenizer=target_tokenizer, source_tokenizer=source_tokenizer,
-                               out_prefix=None)
-emission_model.epoch = 3
+                               out_prefix="/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/HMM/test/epoch100-alltestset-2908/2908_")
+emission_model.epoch = 10
+#target_inputs="/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/others/cz", 
+#                                                    source_inputs="/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/others/en",
+#target_inputs="/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/others/testing.en-cz.cz", 
+#                                                    source_inputs="/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/others/testing.en-cz.en",
+#target_inputs="/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/GIZA++2/corp.merg.en-cz.cln.cz", 
+#                                                    source_inputs="/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/GIZA++2/corp.merg.en-cz.cln.en",
 trans_posteriors = emission_model.train_model_epoch(target_inputs="/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/others/testing.en-cz.cz", 
-                                                    source_inputs="/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/others/testing.en-cz.en", 
-                                                    aer_target_inputs=None, 
-                                                    aer_source_inputs=None,
+                                                    source_inputs="/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/others/testing.en-cz.en",
+                                                    aer_target_inputs="/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/others/testing.en-cz.cz", 
+                                                    aer_source_inputs="/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/others/testing.en-cz.en",
                                                     input_indice_shift=-1,
                                                     align_indice_sift=1,
-                                                    target_AER="/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/others/testing.en-cz.aligment")
+                                                    target_AER="/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/testing.en-cz.aligment")
 # print("trans_posteriors", np.shape(trans_posteriors), trans_posteriors)

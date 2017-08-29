@@ -26,6 +26,7 @@ from theano.compile.nanguardmode import NanGuardMode
 
 from keras.preprocessing.text import Tokenizer
 from keras.preprocessing.sequence import pad_sequences
+theano.config.floatX = "float64"
 
 class EmissionModel:
     """ Simple emission model without CNN
@@ -143,7 +144,7 @@ class EmissionModel:
         self.params_path_prefix = params_path_prefix
         self.out_prefix = out_prefix
         
-        x_training_input = T.matrix().astype(config.floatX)
+        x_training_input = T.matrix().astype(theano.config.floatX)
         
         if (self.params_path_prefix == None):
             self.w, self.b = self.init_weights_bias(vocab_input_size, layer_size, vocab_output_size, seed)
@@ -166,7 +167,7 @@ class EmissionModel:
         softmax_layer_clipped = T.clip(softmax_layer, 1e-35, 1.0 - 1e-35)
         
         # Calculate new gradient
-        posteriors = T.matrix().astype(config.floatX)
+        posteriors = T.matrix().astype(theano.config.floatX)
         
         cost = T.sum(T.transpose(posteriors) * T.log(softmax_layer_clipped))
 #         cost = T.sum(T.transpose(posteriors) * T.log(softmax_layer))
@@ -203,7 +204,7 @@ class EmissionModel:
         
     def train_mini_batch(self, testing_target, testing_source):
         one_hot_input = np.eye(self.vocab_input_size)[testing_target].T
-        one_hot_input = np.asarray(one_hot_input).astype(config.floatX)
+        one_hot_input = np.asarray(one_hot_input).astype(theano.config.floatX)
 #         print("one_hot_input", one_hot_input, np.shape(one_hot_input))
         softmax_matrix = self.test_values(one_hot_input)
 #        print("softmax_matrix", softmax_matrix, np.shape(softmax_matrix))
@@ -224,13 +225,13 @@ class EmissionModel:
         for i, indice in enumerate(testing_source):
             emission_posterior_vout[:, indice] = np.maximum(emission_posterior_vout[:, indice], emission_posterior[:, i])
 #         print("emission_posterior_vout", emission_posterior_vout, np.shape(emission_posterior_vout))
-        self.train_mini_batch_function(one_hot_input, np.asarray(emission_posterior_vout).astype(config.floatX))
+        self.train_mini_batch_function(one_hot_input, np.asarray(emission_posterior_vout).astype(theano.config.floatX))
         
         return emission_posterior, transition_posterior
     
     def test_mini_batch(self, testing_target, testing_source):
         one_hot_input = np.eye(self.vocab_input_size)[testing_target].T
-        one_hot_input = np.asarray(one_hot_input).astype(config.floatX)
+        one_hot_input = np.asarray(one_hot_input).astype(theano.config.floatX)
         softmax_matrix = self.test_values(one_hot_input)
         
         emission_matrix = [] # [f_size, e_size]
@@ -453,15 +454,15 @@ class BaumWelchModel:
         x = np.log(x)
         if len(np.shape(x)) == 1 or whole_matrix:
             e_x = np.exp(x - np.max(x))
-#            e_x = x
+            e_x = np.nan_to_num(e_x)
             return e_x / np.sum(e_x)
         if axis == 0:
             e_x = np.exp( np.subtract(x, np.max(x, axis=axis)[None, :]) )
-#            e_x = x
+            e_x = np.nan_to_num(e_x)
             return e_x / np.sum(e_x, axis=axis)[None, :]
         else: 
             e_x = np.exp( np.subtract(x, np.max(x, axis=axis)[:, None]) )
-#            e_x = x
+            e_x = np.nan_to_num(e_x)
             return e_x / np.sum(e_x, axis=axis)[:, None]
         
     def generate_transition_distant_matrix(self, sentence_length, 
@@ -592,8 +593,9 @@ class BaumWelchModel:
         
         alpha = np.log(alpha)
         e_x = np.exp(alpha - np.max(alpha))
+        e_x = np.nan_to_num(e_x)
         norm_alpha = np.sum(e_x, axis=0)
-        norm_alpha = np.clip(norm_alpha, 1e-50, np.max(norm_alpha))
+        norm_alpha = np.nan_to_num(norm_alpha)
         return np.divide(e_x, norm_alpha), norm_alpha
     
     def calc_backward_messages(self, transition_matrix, emission_matrix, norm_alpha):
@@ -781,7 +783,7 @@ print("non_negative_set", baum_welch_model.non_negative_set)
 
 # Emission model variables
 vocab_input_size = n_target_indices
-d_embedding = 128
+d_embedding = 16
 layer_size = [d_embedding, 512]
 vocab_output_size = n_source_indices
 emission_model = EmissionModel(vocab_input_size=vocab_input_size, layer_size=layer_size, 
