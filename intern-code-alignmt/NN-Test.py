@@ -548,7 +548,7 @@ class BaumWelchModel:
             return self.normalize_matrix(trans_matrix, axis=1)
         return trans_matrix
         
-    def __init__(self, max_distance, po=0.3, seed=1402):
+    def __init__(self, max_distance, po=0.02, seed=1402):
         np.random.seed(seed)
         self.max_distance = max_distance
         self.non_negative_set = np.random.randint(

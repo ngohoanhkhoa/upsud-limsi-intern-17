@@ -127,7 +127,7 @@ class EmissionModel:
     #[7,512]
     def __init__(self, vocab_input_size, layer_size, vocab_output_size, baum_welch_model, 
                  target_tokenizer, source_tokenizer,
-                 epoch=1, batch=1, learning_rate = .001, seed=1412, 
+                 epoch=1, batch=1, learning_rate = .01, seed=1412, 
                  params_path_prefix=None, out_prefix=None):
         
         self.epoch = epoch
@@ -211,22 +211,38 @@ class EmissionModel:
         one_hot_input = np.asarray(one_hot_input).astype(theano.config.floatX)
 #        print("one_hot_input", one_hot_input, np.shape(one_hot_input))
         softmax_matrix = self.test_values(one_hot_input)
-        print("softmax_matrix", softmax_matrix, np.shape(softmax_matrix))
-        softmax_matrix = np.clip(softmax_matrix, 1e-30, np.max(softmax_matrix))
-        softmax_matrix = self.baum_welch_model.normalize_matrix(np.exp(softmax_matrix), axis=0)
-        print("softmax_matrix nomalized", softmax_matrix, np.shape(softmax_matrix))
+        softmax_matrix_mask = np.ma.masked_equal(softmax_matrix, 0.0, copy=False)
+        
+#        print("softmax_matrix", softmax_matrix, np.shape(softmax_matrix))
+        # Verify zero
+        isZero = True
+        for indice in testing_source:
+            if len(softmax_matrix[indice][softmax_matrix[indice] > 0.0]) > 0:
+                isZero = False
+        if (isZero):
+           return None, None 
+       
+        ### attention
+        softmax_matrix[softmax_matrix==0.0] = 1e-200
+        softmax_matrix_mask.fill_value = 1e-200
+#        print("softmax_matrix_mask data", softmax_matrix_mask.data)
+#        print("softmax_matrix before nomalized", softmax_matrix, np.shape(softmax_matrix))
+        softmax_matrix = self.baum_welch_model.normalize_matrix(softmax_matrix, axis=0)
+#        print("softmax_matrix nomalized", softmax_matrix, np.shape(softmax_matrix))
         
         emission_posterior_vout = np.zeros_like(softmax_matrix.T) # [V_f_size, e_size]
         emission_matrix = [] # [f_size, e_size]
         for indice in testing_source:
             emission_matrix.append(softmax_matrix[indice])
-        print("emission_matrix", emission_matrix, np.shape(emission_matrix))
+#        print("emission_matrix", emission_matrix, np.shape(emission_matrix))
         # Normalize emission_matrix
 #         emission_matrix = self.baum_welch_model.normalize_matrix(emission_matrix, axis=0)
 #        print("emission_matrix nomalized", emission_matrix, np.shape(emission_matrix))
         emission_posterior, transition_posterior = \
             self.baum_welch_model.calculate_baum_welch_posteriors(len(testing_target), np.transpose(emission_matrix))
-        print("emission_posterior", np.array(emission_posterior), np.shape(emission_posterior))
+#        print("emission_posterior", np.array(emission_posterior), np.shape(emission_posterior))
+        if (len(emission_posterior[emission_posterior > 0.0]) < 1):
+            return None, None
         
         # transform emission size to [target_size, v_out]
         for i, indice in enumerate(testing_source):
@@ -269,6 +285,7 @@ class EmissionModel:
             with open(source_inputs, encoding="utf8") as source_f, open(target_inputs, encoding='utf8') as target_f:
                 print("running ...")
                 i = 0
+                zero_passed_count = 0
                 for source_line, target_line in zip(source_f, target_f):
                     x_source = self.source_tokenizer.texts_to_sequences([source_line.strip()])[0]
                     x_target = self.target_tokenizer.texts_to_sequences([target_line.strip()])[0]
@@ -282,14 +299,19 @@ class EmissionModel:
                     
                     xx_target = [int(x)+input_indice_shift for x in x_target]
                     xx_source = [int(x)+input_indice_shift for x in x_source]
-#                    if (i%100==0):
-                    print("\n+++++++++ The sentence ", i, " epoch ", epoch)
-                    print("xx_source: ", len(xx_source), " => ", xx_source)
-                    print("xx_target: ", len(xx_target), " => ", xx_target)
+                    if (i%100==0):
+                        print("\n+++++++++ The sentence ", i, " epoch ", epoch)
+                        print("xx_source: ", len(xx_source), " => ", xx_source)
+                        print("xx_target: ", len(xx_target), " => ", xx_target)
+                    i += 1
                     emis_posterior, trans_posterior = self.train_mini_batch(xx_target, xx_source)
+                    if (emis_posterior == None or trans_posterior == None):
+                        print(" 0000000000 Zero Passed 00000000000 --> ", zero_passed_count, " sentences passed / ", i, " sentences")
+                        zero_passed_count += 1
+                        continue
                     self.emission_posteriors.append(emis_posterior)
                     self.transition_posteriors.append(trans_posterior)
-                    i += 1
+                    
             
             # Update Non-negative set of BW model
             self.baum_welch_model.update_non_negative_transition_set(self.emission_posteriors, self.transition_posteriors)
@@ -480,18 +502,19 @@ class BaumWelchModel:
             return np.nan_to_num(e_x / np.sum(e_x, axis=axis)[:, None])
         # for testing
 #        x = np.log(x)
+#        e_x = x
 #        if len(np.shape(x)) == 1 or whole_matrix:
 #            e_x = np.exp(x - np.max(x))
-##            e_x = np.nan_to_num(e_x)
-#            return e_x / np.sum(e_x)
+#            e_x = np.nan_to_num(e_x)
+#            return np.nan_to_num(e_x / np.sum(e_x))
 #        if axis == 0:
 #            e_x = np.exp( np.subtract(x, np.max(x, axis=axis)[None, :]) )
-##            e_x = np.nan_to_num(e_x)
-#            return e_x / np.sum(e_x, axis=axis)[None, :]
+#            e_x = np.nan_to_num(e_x)
+#            return np.nan_to_num(e_x / np.sum(e_x, axis=axis)[None, :])
 #        else: 
 #            e_x = np.exp( np.subtract(x, np.max(x, axis=axis)[:, None]) )
-##            e_x = np.nan_to_num(e_x)
-#            return e_x / np.sum(e_x, axis=axis)[:, None]
+#            e_x = np.nan_to_num(e_x)
+#            return np.nan_to_num(e_x / np.sum(e_x, axis=axis)[:, None])
         
     def generate_transition_distant_matrix(self, sentence_length, 
                                            po=0., nomalized=True):
@@ -530,7 +553,7 @@ class BaumWelchModel:
 
         for i in range(sentence_length):
             trans_distant_matrix[i+sentence_length][i+sentence_length] = po
-            trans_distant_matrix[i+sentence_length][i] = po
+            trans_distant_matrix[i][i+sentence_length] = po
 
             sum_d = np.sum(trans_distant_matrix[i, :sentence_length])
             trans_distant_matrix[i, :sentence_length] = \
@@ -538,7 +561,7 @@ class BaumWelchModel:
                         trans_distant_matrix[i, :sentence_length], 
                         sum_d
                     )
-            trans_distant_matrix[i, sentence_length:] = \
+            trans_distant_matrix[i+sentence_length, :sentence_length] = \
                     np.copy(trans_distant_matrix[i, :sentence_length])
 
         return trans_distant_matrix
@@ -576,7 +599,7 @@ class BaumWelchModel:
             return self.normalize_matrix(trans_matrix, axis=1)
         return trans_matrix
         
-    def __init__(self, max_distance, po=0.3, seed=1402):
+    def __init__(self, max_distance, po=0.02, seed=1402):
         np.random.seed(seed)
         self.max_distance = max_distance
         self.non_negative_set = np.random.randint(
@@ -607,26 +630,49 @@ class BaumWelchModel:
 #        print("unary_matrix", unary_matrix)
         alpha.T[0] = np.multiply(emission_matrix[:,0], unary_matrix)
 #        print("alpha.T[0]", alpha.T[0])
+
+        alpha[:,0] = np.log(alpha[:,0])
         
         for t in np.arange(1, source_len):
             for i in range(target_len):
-                sum_al = 0.0
+                sum_al = [0.0]*target_len
                 for j in range(target_len):
-                    sum_al += alpha[j][t-1] * transition_matrix[j][i]
-
-                alpha[i][t] = emission_matrix[i][t] * sum_al
+#                    if (np.isnan(alpha[j][t-1]) or np.isnan(np.log(transition_matrix[j][i])) or np.isnan(np.log(emission_matrix[i][t]))):
+#                        print("na1 alpha", alpha[j][t-1], alpha[j][t-1])
+#                        print("na1 transition_matrix", transition_matrix[j][i], np.log(transition_matrix[j][i]))
+#                        print("na1 emission_matrix", emission_matrix[i][t], np.log(emission_matrix[i][t]))
+#                    print("1 alpha", alpha[j][t-1], alpha[j][t-1])
+#                    print("1 transition_matrix", transition_matrix[j][i], np.log(transition_matrix[j][i]))
+#                    print("1 emission_matrix", emission_matrix[i][t], np.log(emission_matrix[i][t]))
+                    sum_al[j] = alpha[j][t-1] + np.log(transition_matrix[j][i]) + np.log(emission_matrix[i][t])
+#                alpha[i][t] = emission_matrix[i][t] * sum_al
+#                print("sum_al before", sum_al)                
+                sum_al =  np.sort(sum_al)[::-1]
+#                print("sorted sum_al", sum_al)
+                alpha[i][t] += sum_al[0]
+#                print("sum_al[1:]=", sum_al[1:], " | sum_al[0]=", sum_al[0])
+#                print("sum_al[1:] - sum_al[0] = ", sum_al[1:] - sum_al[0])
+                alpha[i][t] += np.log(1 + np.sum(np.exp(sum_al[1:] - sum_al[0])))
         
-#        norm_alpha = np.sum(alpha, axis=0)
-#        norm_alpha = np.clip(norm_alpha, a_min=1e-34, a_max=np.max(norm_alpha))
+#        print("log alpha before", alpha)
+        sorted_alpha = np.sort(alpha, axis=0)[::-1].T
+        norm_alpha = np.zeros(source_len)
+        for t, al in enumerate(sorted_alpha):
+            norm_alpha[t] += al[0]
+            norm_alpha[t] += np.log(1 + np.sum(np.exp(al[1:] - al[0])))
         
-#        return alpha, 0
-#        print("alpha before", alpha)
-        alpha = np.log(alpha)
-        e_x = np.exp(alpha - np.max(alpha))
-        e_x = np.nan_to_num(e_x)
-        norm_alpha = np.sum(e_x, axis=0)
-        norm_alpha = np.nan_to_num(norm_alpha)
-        return np.nan_to_num(np.divide(e_x, norm_alpha)), norm_alpha
+        alpha = np.subtract(alpha, norm_alpha)
+#        print("log alpha after", alpha)
+        log_alpha = np.copy(alpha)
+        alpha = np.exp(alpha)
+#        print("exp alpha after", alpha)
+        return np.nan_to_num(alpha), norm_alpha, log_alpha
+#        alpha = np.log(alpha)
+#        e_x = np.exp(alpha - np.max(alpha))
+#        e_x = np.nan_to_num(e_x)
+#        norm_alpha = np.sum(e_x, axis=0)
+#        norm_alpha = np.nan_to_num(norm_alpha)
+#        return np.nan_to_num(np.divide(e_x, norm_alpha)), norm_alpha
 #        return np.divide(e_x, norm_alpha), norm_alpha
     
     def calc_backward_messages(self, transition_matrix, emission_matrix, norm_alpha):
@@ -639,28 +685,49 @@ class BaumWelchModel:
         source_len = np.shape(emission_matrix)[1]
         target_len = np.shape(emission_matrix)[0]
 
-
         beta = np.zeros(np.shape(emission_matrix))
-        beta[:,-1] = [1]*target_len
+        beta[:,-1] = [0.0]*target_len
 
         for t in reversed(range(source_len-1)):
             for i in range(target_len):
+                sum_beta = [0.0]*target_len
+#                print("beta", beta)
                 for j in range(target_len):
-                    beta[i][t] += beta[j][t+1] * transition_matrix[i][j] * emission_matrix[j][t+1]
-        
-#        return beta
-        assert(len(norm_alpha) == source_len) # = t_size
+#                    beta[i][t] += beta[j][t+1] * transition_matrix[i][j] * emission_matrix[j][t+1]
+#                    if (beta[i][t+1] or np.isnan(transition_matrix[i][j]) or np.isnan(emission_matrix[j][t+1])):
+#                        print("Na1 beta[j][t+1]", i, t, beta[j][t+1])
+#                        print("Na1 transition_matrix[i][j]", transition_matrix[i][j], np.log(transition_matrix[i][j]))    
+#                        print("Na1 emission_matrix[j][t+1]", emission_matrix[j][t+1], np.log(emission_matrix[j][t+1]))   
+#                    print("1 beta[j][t+1]", i, t, beta[j][t+1])
+#                    print("1 transition_matrix[i][j]", transition_matrix[i][j], np.log(transition_matrix[i][j]))    
+#                    print("1 emission_matrix[j][t+1]", emission_matrix[j][t+1], np.log(emission_matrix[j][t+1])) 
+                    sum_beta[j] = beta[j][t+1] + np.log(transition_matrix[i][j]) + np.log(emission_matrix[j][t+1])
+                sum_beta = np.sort(sum_beta)[::-1]
+#                print("sum_beta j i t -> ", j, i, t, sum_beta)
+                beta[i][t] += sum_beta[0]
+#                print("sum_beta[1:] - sum_beta[0]", sum_beta[1:] - sum_beta[0])
+                beta[i][t] += np.log(1 + np.sum(np.exp(sum_beta[1:] - sum_beta[0])))
+                    
+#        print("log beta before", beta)
+#        print("norm_alpha beta", norm_alpha)
+        beta[:,:-1] = np.subtract(beta[:,:-1], norm_alpha[1:])
+#        print("log beta after", beta)
+        log_beta = np.copy(beta)
+        beta = np.exp(beta)
+#        print("exp beta after", beta)
+        return np.nan_to_num(beta), log_beta
+#        assert(len(norm_alpha) == source_len) # = t_size
 #        print("beta before", beta)
-        e_x = np.copy(beta)
-        e_x = np.log(e_x)
-#        print("beta e_x log", e_x)
-        e_x = np.exp(e_x - np.max(e_x))
-        e_x[:,:-1] = np.divide(e_x[:,:-1], norm_alpha[1:])
-        e_x[:,-1] = beta[:,-1]
-        return np.nan_to_num(e_x)
+#        e_x = np.copy(beta)
+#        e_x = np.log(e_x)
+##        print("beta e_x log", e_x)
+#        e_x = np.exp(e_x - np.max(e_x))
+#        e_x[:,:-1] = np.divide(e_x[:,:-1], norm_alpha[1:])
+#        e_x[:,-1] = beta[:,-1]
+#        return np.nan_to_num(e_x)
 #        return e_x
 
-    def calc_posterior_matrix(self, alpha, beta, transition_matrix, emission_matrix):
+    def calc_posterior_matrix(self, log_alpha, log_beta, transition_matrix, emission_matrix):
         """Calcualte the gama and epsilon values in order to reproduce 
         better transition and emission matrix.
         gamma: P(e_aj|f_j)
@@ -670,24 +737,40 @@ class BaumWelchModel:
         unary_matrix, posterior_gamma, posterior_epsilon
         """
         # TODO: verify matrix length
-        source_len = np.shape(alpha)[1]
-        target_len = np.shape(alpha)[0]
-
-        gamma = np.multiply(alpha, beta)
+        source_len = np.shape(log_alpha)[1]
+        target_len = np.shape(log_alpha)[0]
+        
+        
+        gamma = np.add(log_alpha, log_beta)
         epsilon = np.zeros((source_len-1, target_len, target_len))
 
         # Normalization on columns
-        gamma = self.normalize_matrix(gamma, axis=0)
-
+        sorted_gamma = np.sort(gamma, axis=0)[::-1].T
+        norm_gamma = np.zeros(source_len)
+        for t, al in enumerate(sorted_gamma):
+            norm_gamma[t] += al[0]
+            norm_gamma[t] += np.log(1 + np.sum(np.exp(al[1:] - al[0])))
+        gamma = np.subtract(gamma, norm_gamma)
+#        print("log gamma after", gamma)
+        gamma = np.exp(gamma)
+#        print("exp gamma ", gamma)
+        gamma = np.nan_to_num(gamma)
+#        gamma = self.normalize_matrix(gamma, axis=0)
+        
         for t in range(source_len-1):   
             for i in range(target_len):
                 for j in range(target_len):
-                    epsilon[t][i][j] = alpha[i][t] * transition_matrix[i][j] * \
-                                        beta[j][t+1] * emission_matrix[j][t+1]
+#                    epsilon[t][i][j] = alpha[i][t] * transition_matrix[i][j] * \
+#                                        beta[j][t+1] * emission_matrix[j][t+1]
+                    epsilon[t][i][j] = log_alpha[i][t] + np.log(transition_matrix[i][j]) + \
+                                        log_beta[j][t+1] + np.log(emission_matrix[j][t+1])
             # Normalization
-            epsilon[t] = self.normalize_matrix(epsilon[t], whole_matrix=True)
-
-        # Update unary matrix
+            sum_epsilon = np.sort(epsilon[t].copy().flatten())[::-1]
+            norm_sum_epsilon = sum_epsilon[0] + np.log(1 + np.sum(np.exp(sum_epsilon[1:] - sum_epsilon[0])))
+            epsilon[t] = epsilon[t] - norm_sum_epsilon
+            epsilon[t] = np.exp(epsilon[t])
+        
+        epsilon = np.nan_to_num(epsilon)
         # Normalization unary
         new_unary_matrix = np.copy(gamma[:,0])
         #self.normalize_matrix(np.copy(gamma[:,0]), axis=1)
@@ -697,8 +780,9 @@ class BaumWelchModel:
 
     def calculate_baum_welch_posteriors(self, sentence_length, emission_matrix, unary_matrix=None):
         if unary_matrix == None:
-            unary_matrix = [0.01]*sentence_length
-            unary_matrix[0] = 1 - np.sum(unary_matrix) + 0.01
+#            unary_matrix = [0.01]*sentence_length
+#            unary_matrix[0] = 1 - np.sum(unary_matrix) + 0.01
+            unary_matrix = [1/sentence_length]*sentence_length
         transition_matrix = self.generate_transition_matrix(sentence_length)
 #        emission_matrix = self.normalize_matrix(emission_matrix, axis=0)
 #        emission_matrix = np.clip(emission_matrix, 1e-35, np.max(emission_matrix))
@@ -707,16 +791,16 @@ class BaumWelchModel:
 #        emission_matrix = np.clip(emission_matrix, 1e-35, np.max(emission_matrix))
 #        print("transition_matrix", transition_matrix)
         
-        alpha, norm_alpha = self.calc_forward_messages(unary_matrix, 
+        alpha, norm_alpha, log_alpha = self.calc_forward_messages(unary_matrix, 
                                            transition_matrix, emission_matrix)
         
-        print("alpha", alpha)
+#        print("alpha", alpha)
 #        print("norm_alpha", norm_alpha)
-        beta = self.calc_backward_messages(transition_matrix, emission_matrix, norm_alpha)
-        print("beta", beta)
+        beta, log_beta = self.calc_backward_messages(transition_matrix, emission_matrix, norm_alpha)
+#        print("beta", beta)
         
         new_unary_matrix, emission_posterior, transition_posterior \
-            = self.calc_posterior_matrix(alpha, beta, 
+            = self.calc_posterior_matrix(log_alpha, log_beta, 
                                          transition_matrix, emission_matrix)
         return emission_posterior, transition_posterior # gamma, epsilon
     
@@ -834,7 +918,7 @@ vocab_output_size = n_source_indices
 emission_model = EmissionModel(vocab_input_size=vocab_input_size, layer_size=layer_size, 
                                vocab_output_size=vocab_output_size, baum_welch_model=baum_welch_model,
                                target_tokenizer=target_tokenizer, source_tokenizer=source_tokenizer,
-                               out_prefix="/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/HMM/test/epoch100-alltestset-2908/2908_")
+                               out_prefix="/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/HMM/test/m160/m160_0409_10epochs")
 emission_model.epoch = 10
 #target_inputs="/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/others/cz", 
 #                                                    source_inputs="/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/others/en",
