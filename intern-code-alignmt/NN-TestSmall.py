@@ -55,7 +55,7 @@ class EmissionModel:
         f = open(path, 'w', encoding='utf8')
         for s in alignments:
             for ss in s:
-                f.write(ss + " ") 
+                f.write(str(ss) + " ") 
             f.write("\n") 
         f.close()
         print("File Saved !")
@@ -285,7 +285,7 @@ class EmissionModel:
             with open(source_inputs, encoding="utf8") as source_f, open(target_inputs, encoding='utf8') as target_f:
                 print("running ...")
                 i = 0
-                zero_passed_count = 0
+                zero_passed_count = 1
                 for source_line, target_line in zip(source_f, target_f):
                     x_source = self.source_tokenizer.texts_to_sequences([source_line.strip()])[0]
                     x_target = self.target_tokenizer.texts_to_sequences([target_line.strip()])[0]
@@ -299,7 +299,7 @@ class EmissionModel:
                     
                     xx_target = [int(x)+input_indice_shift for x in x_target]
                     xx_source = [int(x)+input_indice_shift for x in x_source]
-                    if (i%100==0):
+                    if (i%20==0):
                         print("\n+++++++++ The sentence ", i, " epoch ", epoch)
                         print("xx_source: ", len(xx_source), " => ", xx_source)
                         print("xx_target: ", len(xx_target), " => ", xx_target)
@@ -324,6 +324,7 @@ class EmissionModel:
                                   align_indice_sift=align_indice_sift)
                 self.save_params(self.out_prefix + "_params_epoch_" + str(epoch))
                 self.save_obj(align, self.out_prefix + "_alignment_epoch_" + str(epoch))
+                self.save_align(align, self.out_prefix + "_alignment_epoch_" + str(epoch) + ".align")
                 
             if target_AER != None:
                 if self.out_prefix == None:
@@ -780,9 +781,9 @@ class BaumWelchModel:
 
     def calculate_baum_welch_posteriors(self, sentence_length, emission_matrix, unary_matrix=None):
         if unary_matrix == None:
-#            unary_matrix = [0.01]*sentence_length
-#            unary_matrix[0] = 1 - np.sum(unary_matrix) + 0.01
-            unary_matrix = [1/sentence_length]*sentence_length
+            unary_matrix = [0.01]*sentence_length
+            unary_matrix[0] = 1 - np.sum(unary_matrix) + 0.01
+#            unary_matrix = [1/sentence_length]*sentence_length
         transition_matrix = self.generate_transition_matrix(sentence_length)
 #        emission_matrix = self.normalize_matrix(emission_matrix, axis=0)
 #        emission_matrix = np.clip(emission_matrix, 1e-35, np.max(emission_matrix))
@@ -918,7 +919,7 @@ vocab_output_size = n_source_indices
 emission_model = EmissionModel(vocab_input_size=vocab_input_size, layer_size=layer_size, 
                                vocab_output_size=vocab_output_size, baum_welch_model=baum_welch_model,
                                target_tokenizer=target_tokenizer, source_tokenizer=source_tokenizer,
-                               out_prefix="/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/HMM/test/m160/m160_0409_10epochs")
+                               out_prefix="/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/HMM/test/m160/m160_0509_10epochs_")
 emission_model.epoch = 10
 #target_inputs="/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/others/cz", 
 #                                                    source_inputs="/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/others/en",
