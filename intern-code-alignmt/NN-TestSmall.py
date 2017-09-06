@@ -608,6 +608,8 @@ class BaumWelchModel:
                                     size=[max_distance + max_distance + 3]
         )
         self.po = po
+        self.alpha = []
+        self.beta = []
         
     def calc_forward_messages(self, unary_matrix, transition_matrix, emission_matrix):
         """Calcualte the forward messages ~ alpha values.
@@ -662,9 +664,10 @@ class BaumWelchModel:
             norm_alpha[t] += al[0]
             norm_alpha[t] += np.log(1 + np.sum(np.exp(al[1:] - al[0])))
         
-        alpha = np.subtract(alpha, norm_alpha)
-#        print("log alpha after", alpha)
         log_alpha = np.copy(alpha)
+        log_alpha = np.subtract(log_alpha, norm_alpha)
+#        print("log alpha after", log_alpha)
+        
         alpha = np.exp(alpha)
 #        print("exp alpha after", alpha)
         return np.nan_to_num(alpha), norm_alpha, log_alpha
@@ -711,9 +714,10 @@ class BaumWelchModel:
                     
 #        print("log beta before", beta)
 #        print("norm_alpha beta", norm_alpha)
-        beta[:,:-1] = np.subtract(beta[:,:-1], norm_alpha[1:])
-#        print("log beta after", beta)
         log_beta = np.copy(beta)
+        log_beta[:,:-1] = np.subtract(log_beta[:,:-1], norm_alpha[1:])
+#        print("log beta after", beta)
+        
         beta = np.exp(beta)
 #        print("exp beta after", beta)
         return np.nan_to_num(beta), log_beta
@@ -795,11 +799,13 @@ class BaumWelchModel:
         alpha, norm_alpha, log_alpha = self.calc_forward_messages(unary_matrix, 
                                            transition_matrix, emission_matrix)
         
-#        print("alpha", alpha)
+        print("alpha ", alpha)
 #        print("norm_alpha", norm_alpha)
         beta, log_beta = self.calc_backward_messages(transition_matrix, emission_matrix, norm_alpha)
-#        print("beta", beta)
+        print("beta ", beta)
         
+        self.alpha.append(alpha)
+        self.beta.append(beta)
         new_unary_matrix, emission_posterior, transition_posterior \
             = self.calc_posterior_matrix(log_alpha, log_beta, 
                                          transition_matrix, emission_matrix)
