@@ -260,7 +260,7 @@ class EmissionModel:
         emission_matrix = [] # [f_size, e_size]
         for indice in testing_source:
             emission_matrix.append(softmax_matrix[indice])
-        return emission_matrix
+        return self.baum_welch_model.normalize_matrix(emission_matrix, axis=0)
         
     def train_model_epoch(self, target_inputs, source_inputs, 
                           aer_target_inputs=None, aer_source_inputs=None, 
@@ -276,7 +276,7 @@ class EmissionModel:
         print("aer_target_inputs", aer_target_inputs)
         print("aer_source_inputs", aer_source_inputs)
         # TODO: add epoch functionality
-        for epoch in range(self.epoch):
+        for epoch in range(self.epoch + 1):
             print("******** Epoch ", epoch, " ***********")
             self.emission_posteriors = []
             self.transition_posteriors = []
@@ -299,10 +299,13 @@ class EmissionModel:
                     
                     xx_target = [int(x)+input_indice_shift for x in x_target]
                     xx_source = [int(x)+input_indice_shift for x in x_source]
-                    if (i%20==0):
+                    if (i%100==0):
                         print("\n+++++++++ The sentence ", i, " epoch ", epoch)
                         print("xx_source: ", len(xx_source), " => ", xx_source)
                         print("xx_target: ", len(xx_target), " => ", xx_target)
+#                        self.save_obj(self.baum_welch_model.alpha, self.out_prefix + "_log-alpha_epoch_" + str(epoch) + "_sentences_" + str(i))
+#                        self.save_obj(self.baum_welch_model.beta, self.out_prefix + "_log-beta_epoch_" + str(epoch) + "_sentences_" + str(i))
+                        
                     i += 1
                     emis_posterior, trans_posterior = self.train_mini_batch(xx_target, xx_source)
                     if (emis_posterior == None or trans_posterior == None):
@@ -312,6 +315,10 @@ class EmissionModel:
                     self.emission_posteriors.append(emis_posterior)
                     self.transition_posteriors.append(trans_posterior)
                     
+            self.save_obj(self.baum_welch_model.alpha, self.out_prefix + "_log-alpha_epoch_" + str(epoch) + "_end")
+            self.save_obj(self.baum_welch_model.beta, self.out_prefix + "_log-beta_epoch_" + str(epoch) + "_end")
+            self.baum_welch_model.alpha = []
+            self.baum_welch_model.beta = []
             
             # Update Non-negative set of BW model
             self.baum_welch_model.update_non_negative_transition_set(self.emission_posteriors, self.transition_posteriors)
@@ -384,6 +391,7 @@ class EmissionModel:
                         mul = np.array([emis_matrix[ind], emis_matrix[ind]]).flatten() * trans_matrix[align[-1]]
         #                print("max", np.argmax(mul), ":", mul)
                         align.append(np.argmax(mul))
+                        
                     
                     exporting_align = []
                     for ia, a in enumerate(align):
@@ -668,9 +676,9 @@ class BaumWelchModel:
         log_alpha = np.subtract(log_alpha, norm_alpha)
 #        print("log alpha after", log_alpha)
         
-        alpha = np.exp(alpha)
+#        alpha = np.nan_to_num(np.exp(alpha))
 #        print("exp alpha after", alpha)
-        return np.nan_to_num(alpha), norm_alpha, log_alpha
+        return alpha, norm_alpha, log_alpha
 #        alpha = np.log(alpha)
 #        e_x = np.exp(alpha - np.max(alpha))
 #        e_x = np.nan_to_num(e_x)
@@ -715,12 +723,13 @@ class BaumWelchModel:
 #        print("log beta before", beta)
 #        print("norm_alpha beta", norm_alpha)
         log_beta = np.copy(beta)
-        log_beta[:,:-1] = np.subtract(log_beta[:,:-1], norm_alpha[1:])
+#        log_beta[:,:-1] = np.subtract(log_beta[:,:-1], norm_alpha[1:])
+        log_beta = np.subtract(log_beta, norm_alpha)
 #        print("log beta after", beta)
         
-        beta = np.exp(beta)
+#        beta = np.nan_to_num(np.exp(beta))
 #        print("exp beta after", beta)
-        return np.nan_to_num(beta), log_beta
+        return beta, log_beta
 #        assert(len(norm_alpha) == source_len) # = t_size
 #        print("beta before", beta)
 #        e_x = np.copy(beta)
@@ -799,10 +808,10 @@ class BaumWelchModel:
         alpha, norm_alpha, log_alpha = self.calc_forward_messages(unary_matrix, 
                                            transition_matrix, emission_matrix)
         
-        print("alpha ", alpha)
+#        print("log alpha ", log_alpha)
 #        print("norm_alpha", norm_alpha)
         beta, log_beta = self.calc_backward_messages(transition_matrix, emission_matrix, norm_alpha)
-        print("beta ", beta)
+#        print("log beta ", log_beta)
         
         self.alpha.append(alpha)
         self.beta.append(beta)
@@ -925,7 +934,7 @@ vocab_output_size = n_source_indices
 emission_model = EmissionModel(vocab_input_size=vocab_input_size, layer_size=layer_size, 
                                vocab_output_size=vocab_output_size, baum_welch_model=baum_welch_model,
                                target_tokenizer=target_tokenizer, source_tokenizer=source_tokenizer,
-                               out_prefix="/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/HMM/test/m160/m160_0509_10epochs_")
+                               out_prefix="/vol/work2/2017-NeuralAlignments/exp-bach/en-cz/HMM/test/m160/m160_1009_10epochs_subAllBeta_")
 emission_model.epoch = 10
 #target_inputs="/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/others/cz", 
 #                                                    source_inputs="/vol/work2/2017-NeuralAlignments/data/en-cz/formatted/testing/others/en",
